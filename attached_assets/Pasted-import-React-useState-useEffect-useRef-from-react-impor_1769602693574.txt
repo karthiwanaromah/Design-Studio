@@ -1,0 +1,564 @@
+import React, { useState, useEffect, useRef } from "react";
+import { Upload, Type, Plus, Save, Download, Trash2 } from "lucide-react";
+import Header from "./components/header/header";
+
+const ProductCustomizer = () => {
+  const canvasRef = useRef(null);
+  const fabricCanvasRef = useRef(null);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [currentSide, setCurrentSide] = useState("front");
+  const [textInput, setText] = useState("");
+  const [fabricLoaded, setFabricLoaded] = useState(false);
+  const designStateRef = useRef({}); // Store designs for each product/side
+
+  // Three default products - fully frontend
+  const defaultProducts = [
+    {
+      id: 1,
+      name: "Classic White T-Shirt",
+      images: {
+        front: "/pic.jpeg",
+        back: "/pic.jpeg",
+      },
+      printArea: { x: 200, y: 180, width: 400, height: 440 },
+    },
+    {
+      id: 2,
+      name: "Blue Premium Tee",
+      images: {
+        front:
+          "https://images.unsplash.com/photo-1554568218-0f1715e72254?w=800&h=800&fit=crop",
+        back: "https://images.unsplash.com/photo-1554568218-0f1715e72254?w=800&h=800&fit=crop",
+      },
+      printArea: { x: 180, y: 150, width: 440, height: 500 },
+    },
+    {
+      id: 3,
+      name: "Black Sport Shirt",
+      images: {
+        front:
+          "https://images.unsplash.com/photo-1503341504253-dff4815485f1?w=800&h=800&fit=crop",
+        back: "https://images.unsplash.com/photo-1618354691373-d851c5c3a990?w=800&h=800&fit=crop",
+      },
+      printArea: { x: 190, y: 160, width: 420, height: 480 },
+    },
+  ];
+
+  const [products] = useState(defaultProducts);
+
+  // Load Fabric.js from CDN
+  useEffect(() => {
+    if (window.fabric) {
+      setFabricLoaded(true);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src =
+      "https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js";
+    script.async = true;
+    script.onload = () => {
+      console.log("Fabric.js loaded");
+      setFabricLoaded(true);
+    };
+    script.onerror = () => {
+      console.error("Failed to load Fabric.js");
+    };
+    document.body.appendChild(script);
+
+    return () => {
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
+    };
+  }, []);
+
+  // Initialize Fabric.js canvas
+  useEffect(() => {
+    if (fabricLoaded && canvasRef.current && !fabricCanvasRef.current) {
+      const canvas = new window.fabric.Canvas(canvasRef.current, {
+        width: 800,
+        height: 800,
+        backgroundColor: "#ffffff",
+      });
+
+      fabricCanvasRef.current = canvas;
+      console.log("Canvas initialized");
+
+      // Auto-load first product after a short delay
+      setTimeout(() => {
+        if (defaultProducts[0]) {
+          handleProductSelect(defaultProducts[0]);
+        }
+      }, 300);
+    }
+
+    return () => {
+      if (fabricCanvasRef.current) {
+        fabricCanvasRef.current.dispose();
+        fabricCanvasRef.current = null;
+      }
+    };
+  }, [fabricLoaded]);
+
+  const loadProductToCanvas = (product, side = "front") => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) {
+      console.error("Canvas not initialized");
+      return;
+    }
+
+    console.log("Loading product:", product.name, side);
+    canvas.clear();
+    canvas.backgroundColor = "#ffffff";
+
+    const imgUrl = product.images[side];
+
+    // Load background image
+    window.fabric.Image.fromURL(
+      imgUrl,
+      (img) => {
+        console.log("Image loaded:", imgUrl);
+
+        // Scale image to fit canvas
+        const scale = Math.min(
+          canvas.width / img.width,
+          canvas.height / img.height,
+        );
+
+        img.scale(scale);
+        img.set({
+          left: (canvas.width - img.getScaledWidth()) / 2,
+          top: (canvas.height - img.getScaledHeight()) / 2,
+          selectable: false,
+          evented: false,
+        });
+
+        canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+
+        // Restore saved design for this product/side if it exists
+        const designKey = `${product.id}-${side}`;
+        if (designStateRef.current[designKey]) {
+          canvas.loadFromJSON(designStateRef.current[designKey], () => {
+            // Re-add background and print area after loading saved objects
+            canvas.setBackgroundImage(img, () => {
+              // Move print area guide to front
+              const objects = canvas.getObjects();
+              const guide = objects.find(
+                (obj) => obj.name === "printAreaGuide",
+              );
+              if (!guide) {
+                canvas.add(printRect);
+              }
+              canvas.renderAll();
+            });
+          });
+        } else {
+          canvas.renderAll();
+        }
+
+        console.log("Canvas rendered");
+      },
+      {
+        crossOrigin: "anonymous",
+      },
+    );
+  };
+
+  const handleProductSelect = (product) => {
+    console.log("Product selected:", product);
+    setSelectedProduct(product);
+    setCurrentSide("front");
+    loadProductToCanvas(product, "front");
+  };
+
+  const handleSideSwitch = (side) => {
+    if (!selectedProduct || currentSide === side) return;
+
+    // Save current design state before switching
+    const canvas = fabricCanvasRef.current;
+    const currentDesignKey = `${selectedProduct.id}-${currentSide}`;
+    const objectsToSave = canvas
+      .getObjects()
+      .filter((obj) => obj.name !== "printAreaGuide");
+
+    if (objectsToSave.length > 0) {
+      designStateRef.current[currentDesignKey] = canvas.toJSON();
+    }
+
+    setCurrentSide(side);
+    loadProductToCanvas(selectedProduct, side);
+  };
+
+  const handleArtworkUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file || !selectedProduct) return;
+
+    console.log("Uploading file:", file.name);
+    const canvas = fabricCanvasRef.current;
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      console.log("File read complete");
+      window.fabric.Image.fromURL(event.target.result, (img) => {
+        console.log("Image created from upload");
+
+        // Scale to fit nicely in print area
+        const maxWidth = selectedProduct.printArea.width * 0.7;
+        const maxHeight = selectedProduct.printArea.height * 0.7;
+
+        const scale = Math.min(maxWidth / img.width, maxHeight / img.height);
+
+        img.scale(scale);
+        img.set({
+          left:
+            selectedProduct.printArea.x +
+            (selectedProduct.printArea.width - img.getScaledWidth()) / 2,
+          top:
+            selectedProduct.printArea.y +
+            (selectedProduct.printArea.height - img.getScaledHeight()) / 2,
+          cornerSize: 12,
+          cornerColor: "#3b82f6",
+          cornerStyle: "circle",
+          borderColor: "#3b82f6",
+          transparentCorners: false,
+          borderScaleFactor: 2,
+        });
+
+        canvas.add(img);
+        canvas.setActiveObject(img);
+        canvas.renderAll();
+        console.log("Image added to canvas");
+      });
+    };
+
+    reader.readAsDataURL(file);
+    e.target.value = ""; // Reset input
+  };
+
+  const handleAddText = () => {
+    if (!textInput.trim() || !selectedProduct) return;
+
+    console.log("Adding text:", textInput);
+    const canvas = fabricCanvasRef.current;
+    const text = new window.fabric.Text(textInput, {
+      left: selectedProduct.printArea.x + selectedProduct.printArea.width / 2,
+      top: selectedProduct.printArea.y + selectedProduct.printArea.height / 2,
+      fontSize: 48,
+      fontFamily: "Arial Black, Arial, sans-serif",
+      fill: "#000000",
+      originX: "center",
+      originY: "center",
+      cornerSize: 12,
+      cornerColor: "#3b82f6",
+      cornerStyle: "circle",
+      borderColor: "#3b82f6",
+      transparentCorners: false,
+      borderScaleFactor: 2,
+    });
+
+    canvas.add(text);
+    canvas.setActiveObject(text);
+    canvas.renderAll();
+    setText("");
+    console.log("Text added to canvas");
+  };
+
+  const handleDeleteSelected = () => {
+    const canvas = fabricCanvasRef.current;
+    const activeObject = canvas.getActiveObject();
+
+    if (activeObject && activeObject.name !== "printAreaGuide") {
+      canvas.remove(activeObject);
+      canvas.renderAll();
+      console.log("Object deleted");
+    }
+  };
+
+  const handleExport = () => {
+    const canvas = fabricCanvasRef.current;
+
+    // Export at 300 DPI (scale factor ~4.17 from 72 DPI)
+    const dataURL = canvas.toDataURL({
+      format: "png",
+      quality: 1,
+      multiplier: 4.17,
+    });
+
+    const link = document.createElement("a");
+    link.download = `design-${selectedProduct.name.replace(
+      /\s+/g,
+      "-",
+    )}-${currentSide}-300dpi.png`;
+    link.href = dataURL;
+    link.click();
+    console.log("Design exported");
+  };
+
+  const handleSaveDesign = () => {
+    const canvas = fabricCanvasRef.current;
+    const canvasJSON = canvas.toJSON();
+    const previewImage = canvas.toDataURL({ format: "png" });
+
+    const designData = {
+      product_id: selectedProduct.id,
+      product_name: selectedProduct.name,
+      side: currentSide,
+      canvas_json: canvasJSON,
+      preview_image: previewImage,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Use in-memory storage instead of localStorage
+    if (!window.savedDesigns) {
+      window.savedDesigns = [];
+    }
+    window.savedDesigns.push(designData);
+
+    alert(
+      `✅ Design saved!\n\nProduct: ${selectedProduct.name}\nSide: ${currentSide}\nTotal saved designs: ${window.savedDesigns.length}`,
+    );
+    console.log("Design saved to memory");
+  };
+
+  const handleTextColorChange = (color) => {
+    const canvas = fabricCanvasRef.current;
+    const activeObject = canvas.getActiveObject();
+
+    if (activeObject && activeObject.type === "text") {
+      activeObject.set("fill", color);
+      canvas.renderAll();
+    }
+  };
+
+  return (
+    <>
+      <Header />
+      <div className="min-h-screen p-[150px] bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
+        <div className="max-w-[1800px] mx-auto">
+          <div className="text-center mb-6">
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent mb-2">
+              Product Customizer Studio
+            </h1>
+            <p className="text-gray-600">Design your perfect custom apparel</p>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-2xl p-6">
+            <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr_380px] gap-6">
+              {/* COLUMN 1 - TOOLS */}
+              <div className="space-y-4">
+                <div className="bg-gradient-to-r from-blue-500 to-indigo-500 text-white p-4 rounded-xl">
+                  <h2 className="text-lg font-bold">🎨 Design Tools</h2>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block">
+                    <div className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl cursor-pointer hover:from-blue-600 hover:to-blue-700 transition shadow-md">
+                      <Upload size={20} />
+                      <span className="font-medium">Upload Artwork</span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/jpg,image/svg+xml"
+                      onChange={handleArtworkUpload}
+                      className="hidden"
+                      disabled={!selectedProduct}
+                    />
+                  </label>
+
+                  <div className="space-y-2 bg-gray-50 p-4 rounded-xl">
+                    <label className="flex items-center gap-2 text-gray-700 font-semibold text-sm">
+                      <Type size={18} />
+                      Add Custom Text
+                    </label>
+                    <input
+                      type="text"
+                      value={textInput}
+                      onChange={(e) => setText(e.target.value)}
+                      onKeyPress={(e) => e.key === "Enter" && handleAddText()}
+                      placeholder="Type your text here..."
+                      className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none transition"
+                      disabled={!selectedProduct}
+                    />
+
+                    <div className="flex gap-2">
+                      {[
+                        "#000000",
+                        "#FFFFFF",
+                        "#3B82F6",
+                        "#EF4444",
+                        "#10B981",
+                        "#F59E0B",
+                      ].map((color) => (
+                        <button
+                          key={color}
+                          onClick={() => handleTextColorChange(color)}
+                          className="w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition"
+                          style={{ backgroundColor: color }}
+                          title={`Set text color to ${color}`}
+                        />
+                      ))}
+                    </div>
+
+                    <button
+                      onClick={handleAddText}
+                      disabled={!selectedProduct || !textInput.trim()}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl hover:from-green-600 hover:to-green-700 transition shadow-md disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed"
+                    >
+                      <Plus size={18} />
+                      Add to Canvas
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={handleDeleteSelected}
+                    disabled={!selectedProduct}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-red-500 text-white rounded-xl hover:bg-red-600 transition shadow-md disabled:bg-gray-300"
+                  >
+                    <Trash2 size={18} />
+                    Delete Selected
+                  </button>
+
+                  <div className="pt-2 space-y-2">
+                    <button
+                      onClick={handleSaveDesign}
+                      disabled={!selectedProduct}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-xl hover:from-purple-600 hover:to-purple-700 transition shadow-md disabled:from-gray-300 disabled:to-gray-300"
+                    >
+                      <Save size={18} />
+                      Save Design
+                    </button>
+
+                    <button
+                      onClick={handleExport}
+                      disabled={!selectedProduct}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-xl hover:from-indigo-600 hover:to-indigo-700 transition shadow-md disabled:from-gray-300 disabled:to-gray-300"
+                    >
+                      <Download size={18} />
+                      Export (300 DPI)
+                    </button>
+                  </div>
+
+                  <div className="text-xs text-gray-500 bg-blue-50 p-3 rounded-lg mt-4">
+                    <strong>💡 Tips:</strong>
+                    <ul className="list-disc list-inside mt-1 space-y-1">
+                      <li>Drag to move elements</li>
+                      <li>Corners to resize/rotate</li>
+                      <li>Stay inside blue area</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {/* COLUMN 2 - CANVAS */}
+              <div className="flex flex-col items-center space-y-4">
+                <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
+                  <button
+                    onClick={() => handleSideSwitch("front")}
+                    className={`px-8 py-2 rounded-lg font-semibold transition ${
+                      currentSide === "front"
+                        ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-md"
+                        : "bg-white text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    Front Side
+                  </button>
+                  <button
+                    onClick={() => handleSideSwitch("back")}
+                    className={`px-8 py-2 rounded-lg font-semibold transition ${
+                      currentSide === "back"
+                        ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-md"
+                        : "bg-white text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    Back Side
+                  </button>
+                </div>
+
+                <div className="border-4 border-gray-300 rounded-2xl overflow-hidden shadow-2xl bg-white">
+                  <canvas ref={canvasRef} />
+                </div>
+
+                {selectedProduct && (
+                  <div className="text-center">
+                    <p className="text-sm font-semibold text-gray-700">
+                      {selectedProduct.name} - {currentSide.toUpperCase()}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Print Area: {selectedProduct.printArea.width}x
+                      {selectedProduct.printArea.height}px
+                    </p>
+                  </div>
+                )}
+
+                {!fabricLoaded && (
+                  <div className="text-center text-gray-500">
+                    <p>Loading Fabric.js...</p>
+                  </div>
+                )}
+              </div>
+
+              {/* COLUMN 3 - PRODUCT SELECTOR */}
+              <div className="space-y-4">
+                <div className="bg-gradient-to-r from-indigo-500 to-purple-500 text-white p-4 rounded-xl">
+                  <h2 className="text-lg font-bold">Select Product</h2>
+                </div>
+
+                <div className="space-y-3 max-h-[700px] overflow-y-auto">
+                  {products.map((product) => (
+                    <div
+                      key={product.id}
+                      onClick={() => handleProductSelect(product)}
+                      className={`p-3 border-2 rounded-xl cursor-pointer transition-all transform hover:scale-105 ${
+                        selectedProduct?.id === product.id
+                          ? "border-blue-500 bg-blue-50 shadow-lg"
+                          : "border-gray-200 hover:border-blue-300 bg-white"
+                      }`}
+                    >
+                      <img
+                        src={product.images.front}
+                        alt={product.name}
+                        className="w-full h-40 object-cover rounded-lg mb-2 shadow-md"
+                      />
+                      <h3 className="font-bold text-gray-800 text-center">
+                        {product.name}
+                      </h3>
+                      {selectedProduct?.id === product.id && (
+                        <p className="text-xs text-blue-600 text-center mt-1 font-semibold">
+                          ✓ Currently Selected
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-gradient-to-r from-green-50 to-blue-50 p-4 rounded-xl border-2 border-green-200">
+                  <h3 className="font-bold text-gray-800 mb-2 text-sm">
+                    📦 Frontend Demo
+                  </h3>
+                  <p className="text-xs text-gray-600 leading-relaxed">
+                    All 3 products pre-loaded. No backend needed! Designs save
+                    to memory.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 text-center">
+            <p className="text-sm text-gray-600">
+              <strong>100% Frontend</strong> • Powered by React + Fabric.js • No
+              PHP Backend Required
+            </p>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+};
+
+export default ProductCustomizer;
+
+want this in wordpress with custom css 
+
+this product customization section in wordpress make it better version of this fully poduction version
