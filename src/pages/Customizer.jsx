@@ -1,3 +1,4 @@
+import { jsPDF } from "jspdf";
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as fabric from "fabric";
 import {
@@ -12,10 +13,12 @@ import {
   Loader2,
   Upload,
   ArrowRight,
+  CheckCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ColorPicker } from "@/components/ColorPicker";
+import { SignaturePad } from "@/components/SignaturePad";
 import { useSaveDesign } from "@/hooks/use-designs";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -45,6 +48,8 @@ export default function Customizer() {
   const [inputText, setInputText] = useState("");
   const [activeObject, setActiveObject] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [signature, setSignature] = useState(null);
+  const [isVerified, setIsVerified] = useState(false);
 
   const canvasRef = useRef(null);
   const fabricCanvasRef = useRef(null);
@@ -306,25 +311,112 @@ export default function Customizer() {
     }
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!fabricCanvasRef.current) return;
-    const dataURL = fabricCanvasRef.current.toDataURL({
-      format: "png",
-      quality: 1,
-      multiplier: 2,
-    });
+    setIsSaving(true);
 
-    const link = document.createElement("a");
-    link.download = `${productName.replace(/\s+/g, "-")}-${side}.png`;
-    link.href = dataURL;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const margin = 10;
+      const contentWidth = pageWidth - margin * 2;
 
-    toast({
-      title: "Design Downloaded",
-      description: "Your design has been exported as a PNG.",
-    });
+      // Title
+      doc.setFontSize(20);
+      doc.text("Job Sheet: " + productName, margin, 20);
+      doc.setFontSize(12);
+      doc.text("Generated on: " + new Date().toLocaleDateString(), margin, 30);
+
+      // Helper to capture a side's design
+      const captureSide = async (sideName) => {
+        // Switch to the side to capture it
+        const currentSide = side;
+        if (currentSide !== sideName) {
+          await switchSide(sideName);
+        }
+
+        // Wait a bit for fabric to render
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        const dataURL = fabricCanvasRef.current.toDataURL({
+          format: "png",
+          quality: 1,
+          multiplier: 2,
+        });
+
+        // Switch back if needed
+        if (currentSide !== sideName) {
+          await switchSide(currentSide);
+        }
+
+        return dataURL;
+      };
+
+      // Add Front Design
+      doc.text("Front Design", margin, 45);
+      const frontData = await captureSide("front");
+      doc.addImage(
+        frontData,
+        "PNG",
+        margin,
+        50,
+        contentWidth / 2,
+        contentWidth / 2,
+      );
+
+      // Add Back Design
+      doc.text("Back Design", margin + contentWidth / 2 + 5, 45);
+      const backData = await captureSide("back");
+      doc.addImage(
+        backData,
+        "PNG",
+        margin + contentWidth / 2 + 5,
+        50,
+        contentWidth / 2,
+        contentWidth / 2,
+      );
+
+      // Signature and Verification
+      const bottomY = 160;
+      doc.setDrawColor(200);
+      doc.line(margin, bottomY - 5, pageWidth - margin, bottomY - 5);
+
+      doc.setFontSize(14);
+      doc.text("Approval & Sign-off", margin, bottomY + 5);
+
+      doc.setFontSize(10);
+      const verificationText = isVerified
+        ? "[X] Verified that the design, colors, and text are correct."
+        : "[ ] Design verification pending.";
+      doc.text(verificationText, margin, bottomY + 15);
+
+      if (signature) {
+        doc.text("Customer Signature:", margin, bottomY + 25);
+        doc.addImage(signature, "PNG", margin, bottomY + 30, 60, 20);
+      } else {
+        doc.text(
+          "Customer Signature: (No signature provided)",
+          margin,
+          bottomY + 25,
+        );
+      }
+
+      doc.save(`${productName.replace(/\s+/g, "-")}-job-sheet.pdf`);
+
+      toast({
+        title: "PDF Exported",
+        description: "Your job sheet has been exported as a PDF.",
+      });
+    } catch (error) {
+      console.error("Export failed:", error);
+      toast({
+        title: "Export Failed",
+        description: "There was an error generating the PDF.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleSaveDesign = async () => {
@@ -345,6 +437,8 @@ export default function Customizer() {
         side: side,
         canvasJson: json,
         previewImage: preview,
+        signature: signature,
+        verified: isVerified,
       });
     } catch (error) {
       console.error("Failed to save:", error);
@@ -392,13 +486,11 @@ export default function Customizer() {
         <header className="bg-card border-b sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-4 h-16 flex items-center">
             <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground">
+                <Shirt className="w-5 h-5" />
+              </div>
               <h1 className="text-xl font-bold tracking-tight">
-                <img
-                  src="/SIBP-Logo.png"
-                  style={{ height: "40px" }}
-                  alt=""
-                  srcset=""
-                />
+                Product Customizer
               </h1>
             </div>
           </div>
@@ -552,12 +644,9 @@ export default function Customizer() {
       <header className="bg-card border-b sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <img
-              src="/SIBP-Logo.png"
-              style={{ height: "40px" }}
-              alt=""
-              srcset=""
-            />
+            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground">
+              <Shirt className="w-5 h-5" />
+            </div>
             <h1 className="text-xl font-bold tracking-tight">{productName}</h1>
           </div>
 
@@ -767,6 +856,41 @@ export default function Customizer() {
             </div>
             <div className="mt-3 text-xs text-muted-foreground text-center">
               Click to switch view
+            </div>
+          </div>
+
+          <div className="bg-card rounded-xl shadow-sm border p-5 space-y-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+              <CheckCircle className="w-4 h-4" /> Approval & Sign-off
+            </h3>
+
+            <div className="space-y-4">
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  id="verify-design"
+                  checked={isVerified}
+                  onChange={(e) => setIsVerified(e.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                />
+                <label
+                  htmlFor="verify-design"
+                  className="text-sm leading-tight text-muted-foreground cursor-pointer"
+                >
+                  I verify that the design, colors, and text are correct as per
+                  the job requirements.
+                </label>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Customer Signature
+                </label>
+                <SignaturePad
+                  onSave={setSignature}
+                  onClear={() => setSignature(null)}
+                />
+              </div>
             </div>
           </div>
         </div>
