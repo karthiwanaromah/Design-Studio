@@ -50,6 +50,25 @@ export default function Customizer() {
   const [isSaving, setIsSaving] = useState(false);
   const [signature, setSignature] = useState(null);
   const [isVerified, setIsVerified] = useState(false);
+  const [customerInfo, setCustomerInfo] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    address: "",
+    pocName: "",
+    approvedBy: "",
+  });
+  const [selectedFont, setSelectedFont] = useState("Arial Black");
+  const [artPrintColor, setArtPrintColor] = useState("#000000");
+
+  const FONTS = [
+    "Arial Black",
+    "Times New Roman",
+    "Courier New",
+    "Georgia",
+    "Verdana",
+    "Impact",
+  ];
 
   const canvasRef = useRef(null);
   const fabricCanvasRef = useRef(null);
@@ -237,7 +256,7 @@ export default function Customizer() {
     const text = new fabric.FabricText(inputText, {
       left: CANVAS_SIZE / 2,
       top: CANVAS_SIZE / 2,
-      fontFamily: "Arial Black",
+      fontFamily: selectedFont,
       fill: "#000000",
       fontSize: 40,
       originX: "center",
@@ -311,8 +330,63 @@ export default function Customizer() {
     }
   };
 
+  const changeFont = (font) => {
+    setSelectedFont(font);
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+    const active = canvas.getActiveObject();
+
+    if (active && (active.type === "text" || active.type === "i-text")) {
+      active.set("fontFamily", font);
+      canvas.renderAll();
+    }
+  };
+
   const handleExport = async () => {
     if (!fabricCanvasRef.current) return;
+
+    // Validation
+    const requiredFields = {
+      "Customer Name": customerInfo.name,
+      "Customer Email": customerInfo.email,
+      "Customer Phone": customerInfo.phone,
+      "Delivery Address": customerInfo.address,
+      "POC Name": customerInfo.pocName,
+      "Approved By": customerInfo.approvedBy,
+    };
+
+    const missingFields = Object.entries(requiredFields)
+      .filter(([_, value]) => !value?.trim())
+      .map(([label]) => label);
+
+    if (missingFields.length > 0) {
+      toast({
+        title: "Required Fields Missing",
+        description: `Please fill in: ${missingFields.join(", ")}`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!isVerified) {
+      toast({
+        title: "Verification Required",
+        description:
+          "Please check the verification box to confirm design accuracy.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!signature) {
+      toast({
+        title: "Signature Required",
+        description: "Please provide a customer signature before exporting.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsSaving(true);
 
     try {
@@ -326,6 +400,17 @@ export default function Customizer() {
       doc.text("Job Sheet: " + productName, margin, 20);
       doc.setFontSize(12);
       doc.text("Generated on: " + new Date().toLocaleDateString(), margin, 30);
+
+      // Customer Info Section
+      doc.setFontSize(14);
+      doc.text("Customer Information", margin, 45);
+      doc.setFontSize(10);
+      doc.text(`Name: ${customerInfo.name || "N/A"}`, margin, 52);
+      doc.text(`Email: ${customerInfo.email || "N/A"}`, margin, 57);
+      doc.text(`Phone: ${customerInfo.phone || "N/A"}`, margin, 62);
+      doc.text(`Address: ${customerInfo.address || "N/A"}`, margin, 67);
+      doc.text(`POC Name: ${customerInfo.pocName || "N/A"}`, margin, 72);
+      doc.text(`Art Print Color: ${artPrintColor}`, margin, 77);
 
       // Helper to capture a side's design
       const captureSide = async (sideName) => {
@@ -353,31 +438,33 @@ export default function Customizer() {
       };
 
       // Add Front Design
-      doc.text("Front Design", margin, 45);
+      const designY = 85;
+      doc.setFontSize(12);
+      doc.text("Front Design", margin, designY);
       const frontData = await captureSide("front");
       doc.addImage(
         frontData,
         "PNG",
         margin,
-        50,
-        contentWidth / 2,
-        contentWidth / 2,
+        designY + 5,
+        contentWidth / 2 - 2,
+        contentWidth / 2 - 2,
       );
 
       // Add Back Design
-      doc.text("Back Design", margin + contentWidth / 2 + 5, 45);
+      doc.text("Back Design", margin + contentWidth / 2 + 2, designY);
       const backData = await captureSide("back");
       doc.addImage(
         backData,
         "PNG",
-        margin + contentWidth / 2 + 5,
-        50,
-        contentWidth / 2,
-        contentWidth / 2,
+        margin + contentWidth / 2 + 2,
+        designY + 5,
+        contentWidth / 2 - 2,
+        contentWidth / 2 - 2,
       );
 
       // Signature and Verification
-      const bottomY = 160;
+      const bottomY = 210;
       doc.setDrawColor(200);
       doc.line(margin, bottomY - 5, pageWidth - margin, bottomY - 5);
 
@@ -389,15 +476,20 @@ export default function Customizer() {
         ? "[X] Verified that the design, colors, and text are correct."
         : "[ ] Design verification pending.";
       doc.text(verificationText, margin, bottomY + 15);
+      doc.text(
+        `Approved By: ${customerInfo.approvedBy || "N/A"}`,
+        margin,
+        bottomY + 22,
+      );
 
       if (signature) {
-        doc.text("Customer Signature:", margin, bottomY + 25);
-        doc.addImage(signature, "PNG", margin, bottomY + 30, 60, 20);
+        doc.text("Customer Signature:", margin, bottomY + 30);
+        doc.addImage(signature, "PNG", margin, bottomY + 35, 60, 20);
       } else {
         doc.text(
           "Customer Signature: (No signature provided)",
           margin,
-          bottomY + 25,
+          bottomY + 30,
         );
       }
 
@@ -721,6 +813,36 @@ export default function Customizer() {
                 </div>
 
                 <div className="space-y-2">
+                  <label className="text-sm font-medium">Art Print Color</label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="color"
+                      className="w-full h-10 rounded-md cursor-pointer border-none p-0"
+                      value={artPrintColor}
+                      onChange={(e) => setArtPrintColor(e.target.value)}
+                    />
+                    <div className="text-xs font-mono text-muted-foreground uppercase">
+                      {artPrintColor}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Font Style</label>
+                  <select
+                    className="w-full rounded-md border border-input bg-background px-3 h-9 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={selectedFont}
+                    onChange={(e) => changeFont(e.target.value)}
+                  >
+                    {FONTS.map((font) => (
+                      <option key={font} value={font}>
+                        {font}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
                   <label className="text-sm font-medium">Add Text</label>
                   <div className="flex gap-2">
                     <Input
@@ -752,12 +874,39 @@ export default function Customizer() {
                   {(activeObject.type === "text" ||
                     activeObject.type === "i-text" ||
                     activeObject.type === "path") && (
-                    <ColorPicker
-                      label="Color"
-                      colors={TEXT_COLORS}
-                      selectedColor={activeObject.fill}
-                      onColorSelect={changeColor}
-                    />
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">
+                          Text Color
+                        </label>
+                        <input
+                          type="color"
+                          className="w-full h-10 rounded-md cursor-pointer border-none p-0"
+                          value={activeObject.fill || "#000000"}
+                          onChange={(e) => changeColor(e.target.value)}
+                        />
+                      </div>
+
+                      {(activeObject.type === "text" ||
+                        activeObject.type === "i-text") && (
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium">
+                            Font Style
+                          </label>
+                          <select
+                            className="w-full rounded-md border border-input bg-background px-3 h-9 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                            value={activeObject.fontFamily}
+                            onChange={(e) => changeFont(e.target.value)}
+                          >
+                            {FONTS.map((font) => (
+                              <option key={font} value={font}>
+                                {font}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   <div className="pt-2">
@@ -780,39 +929,40 @@ export default function Customizer() {
           </div>
         </div>
 
-        <div className="lg:col-span-6 flex items-center justify-center bg-muted/30 rounded-2xl border-2 border-dashed border-border relative overflow-hidden">
-          <div className="relative shadow-2xl rounded-lg overflow-hidden bg-card">
-            <canvas ref={canvasRef} />
-          </div>
+        <div className="lg:col-span-6 flex items-start justify-center bg-muted/30 ">
+          <div className="lg:col-span-6 flex items-center justify-center bg-muted/30 rounded-2xl border-2 border-dashed border-border  overflow-hidden">
+            <div className="relative shadow-2xl rounded-lg overflow-hidden bg-card">
+              <canvas ref={canvasRef} />
+            </div>
 
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-card/90 backdrop-blur px-4 py-2 rounded-full shadow-lg border flex gap-4 text-sm font-medium">
-            <button
-              onClick={() => switchSide("front")}
-              className={cn(
-                "px-3 py-1 rounded-full transition-colors",
-                side === "front"
-                  ? "bg-primary text-primary-foreground"
-                  : "hover:bg-muted",
-              )}
-              data-testid="button-front-view"
-            >
-              Front View
-            </button>
-            <button
-              onClick={() => switchSide("back")}
-              className={cn(
-                "px-3 py-1 rounded-full transition-colors",
-                side === "back"
-                  ? "bg-primary text-primary-foreground"
-                  : "hover:bg-muted",
-              )}
-              data-testid="button-back-view"
-            >
-              Back View
-            </button>
+            {/* <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-card/90 backdrop-blur px-4 py-2 rounded-full shadow-lg border flex gap-4 text-sm font-medium">
+              <button
+                onClick={() => switchSide("front")}
+                className={cn(
+                  "px-3 py-1 rounded-full transition-colors",
+                  side === "front"
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted",
+                )}
+                data-testid="button-front-view"
+              >
+                Front View
+              </button>
+              <button
+                onClick={() => switchSide("back")}
+                className={cn(
+                  "px-3 py-1 rounded-full transition-colors",
+                  side === "back"
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted",
+                )}
+                data-testid="button-back-view"
+              >
+                Back View
+              </button>
+            </div> */}
           </div>
         </div>
-
         <div className="lg:col-span-3 space-y-6 overflow-y-auto pl-2 pb-20">
           <div className="bg-card rounded-xl shadow-sm border p-5">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">
@@ -860,6 +1010,50 @@ export default function Customizer() {
           </div>
 
           <div className="bg-card rounded-xl shadow-sm border p-5 space-y-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Customer Details
+            </h3>
+            <div className="space-y-3">
+              <Input
+                placeholder="Full Name"
+                value={customerInfo.name}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, name: e.target.value })
+                }
+              />
+              <Input
+                placeholder="Email Address"
+                value={customerInfo.email}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, email: e.target.value })
+                }
+              />
+              <Input
+                placeholder="Phone Number"
+                value={customerInfo.phone}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, phone: e.target.value })
+                }
+              />
+              <Input
+                placeholder="POC Name (Coordinator)"
+                value={customerInfo.pocName}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, pocName: e.target.value })
+                }
+              />
+              <textarea
+                placeholder="Delivery Address"
+                className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                value={customerInfo.address}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, address: e.target.value })
+                }
+              />
+            </div>
+          </div>
+
+          <div className="bg-card rounded-xl shadow-sm border p-5 space-y-4">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
               <CheckCircle className="w-4 h-4" /> Approval & Sign-off
             </h3>
@@ -880,6 +1074,22 @@ export default function Customizer() {
                   I verify that the design, colors, and text are correct as per
                   the job requirements.
                 </label>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Approved Person Name
+                </label>
+                <Input
+                  placeholder="Name of person approving"
+                  value={customerInfo.approvedBy}
+                  onChange={(e) =>
+                    setCustomerInfo({
+                      ...customerInfo,
+                      approvedBy: e.target.value,
+                    })
+                  }
+                />
               </div>
 
               <div className="space-y-2">
