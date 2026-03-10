@@ -22,6 +22,10 @@ import { SignaturePad } from "@/components/SignaturePad";
 import { useSaveDesign } from "@/hooks/use-designs";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import * as pdfjsLib from "pdfjs-dist";
+import PDFWorker from "pdfjs-dist/build/pdf.worker?url";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = PDFWorker;
 
 const TEXT_COLORS = [
   "#000000",
@@ -34,6 +38,43 @@ const TEXT_COLORS = [
   "#EC4899",
 ];
 const CANVAS_SIZE = 600;
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Remove near-white pixels from a canvas element (makes PDF backgrounds transparent).
+ * Threshold: pixels with R,G,B all > 240 become fully transparent.
+ */
+function removeWhiteBackground(canvas) {
+  const ctx = canvas.getContext("2d");
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    if (r > 240 && g > 240 && b > 240) {
+      data[i + 3] = 0; // fully transparent
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+/**
+ * Enable high-quality image smoothing on a Fabric canvas.
+ */
+function enableCanvasSmoothing(fabricCanvas) {
+  const ctx = fabricCanvas.contextContainer;
+  if (ctx) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 
 export default function Customizer() {
   const { toast } = useToast();
@@ -52,6 +93,7 @@ export default function Customizer() {
   const [isVerified, setIsVerified] = useState(false);
   const [customerInfo, setCustomerInfo] = useState({
     name: "",
+    company: "",
     email: "",
     phone: "",
     address: "",
@@ -199,6 +241,9 @@ export default function Customizer() {
 
     fabricCanvasRef.current = canvas;
 
+    // Enable high-quality smoothing globally on init
+    enableCanvasSmoothing(canvas);
+
     const updateActiveObject = () => {
       const active = canvas.getActiveObject();
       if (active === bgImageRef.current) {
@@ -268,37 +313,111 @@ export default function Customizer() {
     fabricCanvasRef.current.renderAll();
   };
 
-  const handleArtworkUpload = (e) => {
+  const handleArtworkUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !fabricCanvasRef.current) return;
 
-    const reader = new FileReader();
-    reader.onload = (f) => {
-      const data = f.target?.result;
+    const canvas = fabricCanvasRef.current;
+
+    // ── IMAGE FILE ──────────────────────────────────────────────────────────
+    if (file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = (f) => {
+        const imgElement = new Image();
+        imgElement.onload = () => {
+          const img = new fabric.FabricImage(imgElement);
+
+          // Scale to 300px max while preserving aspect ratio
+          const maxSize = 300;
+          img.scaleToWidth(
+            img.width >= img.height
+              ? maxSize
+              : maxSize * (img.width / img.height),
+          );
+
+          img.set({
+            left: CANVAS_SIZE / 2,
+            top: CANVAS_SIZE / 2,
+            originX: "center",
+            originY: "center",
+            objectCaching: false,
+          });
+
+          canvas.add(img);
+          canvas.setActiveObject(img);
+          enableCanvasSmoothing(canvas);
+          canvas.renderAll();
+        };
+        imgElement.src = f.target.result;
+      };
+
+      reader.readAsDataURL(file);
+    }
+
+    // ── PDF FILE ────────────────────────────────────────────────────────────
+    if (file.type === "application/pdf") {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+      const page = await pdf.getPage(1);
+
+      // Render at 6× scale for maximum sharpness — this gives ~3 000 px
+      // which stays crisp even when the user scales the object down to 100 px.
+      const viewport = page.getViewport({ scale: 6 });
+
+      const tempCanvas = document.createElement("canvas");
+      const ctx = tempCanvas.getContext("2d");
+
+      tempCanvas.width = viewport.width;
+      tempCanvas.height = viewport.height;
+
+      // White fill first so PDF.js has a proper background to render onto
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+      await page.render({
+        canvasContext: ctx,
+        viewport,
+      }).promise;
+
+      // ✅ Remove white background → logo becomes transparent
+      removeWhiteBackground(tempCanvas);
+
+      const imgData = tempCanvas.toDataURL("image/png");
+
       const imgElement = new Image();
       imgElement.onload = () => {
         const img = new fabric.FabricImage(imgElement);
 
-        const maxSize = 200;
-        if (img.width > maxSize || img.height > maxSize) {
-          const scale = maxSize / Math.max(img.width, img.height);
-          img.set({ scaleX: scale, scaleY: scale });
-        }
+        // Place at a comfortable default size; user can resize freely
+        const maxSize = 300;
+        img.scaleToWidth(
+          img.width >= img.height
+            ? maxSize
+            : maxSize * (img.width / img.height),
+        );
 
         img.set({
           left: CANVAS_SIZE / 2,
           top: CANVAS_SIZE / 2,
           originX: "center",
           originY: "center",
+          // objectCaching: false keeps the image crisp when scaled
+          objectCaching: false,
         });
 
-        fabricCanvasRef.current?.add(img);
-        fabricCanvasRef.current?.setActiveObject(img);
-        fabricCanvasRef.current?.renderAll();
+        canvas.add(img);
+        canvas.setActiveObject(img);
+
+        // ✅ High-quality smoothing so scaling never looks pixelated
+        enableCanvasSmoothing(canvas);
+
+        canvas.renderAll();
       };
-      imgElement.src = data;
-    };
-    reader.readAsDataURL(file);
+
+      imgElement.src = imgData;
+    }
+
     e.target.value = "";
   };
 
@@ -414,13 +533,11 @@ export default function Customizer() {
 
       // Helper to capture a side's design
       const captureSide = async (sideName) => {
-        // Switch to the side to capture it
         const currentSide = side;
         if (currentSide !== sideName) {
           await switchSide(sideName);
         }
 
-        // Wait a bit for fabric to render
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         const dataURL = fabricCanvasRef.current.toDataURL({
@@ -429,7 +546,6 @@ export default function Customizer() {
           multiplier: 2,
         });
 
-        // Switch back if needed
         if (currentSide !== sideName) {
           await switchSide(currentSide);
         }
@@ -798,7 +914,7 @@ export default function Customizer() {
                   <div className="relative">
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/*,.pdf"
                       onChange={handleArtworkUpload}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                       data-testid="input-artwork-upload"
@@ -934,35 +1050,9 @@ export default function Customizer() {
             <div className="relative shadow-2xl rounded-lg overflow-hidden bg-card">
               <canvas ref={canvasRef} />
             </div>
-
-            {/* <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-card/90 backdrop-blur px-4 py-2 rounded-full shadow-lg border flex gap-4 text-sm font-medium">
-              <button
-                onClick={() => switchSide("front")}
-                className={cn(
-                  "px-3 py-1 rounded-full transition-colors",
-                  side === "front"
-                    ? "bg-primary text-primary-foreground"
-                    : "hover:bg-muted",
-                )}
-                data-testid="button-front-view"
-              >
-                Front View
-              </button>
-              <button
-                onClick={() => switchSide("back")}
-                className={cn(
-                  "px-3 py-1 rounded-full transition-colors",
-                  side === "back"
-                    ? "bg-primary text-primary-foreground"
-                    : "hover:bg-muted",
-                )}
-                data-testid="button-back-view"
-              >
-                Back View
-              </button>
-            </div> */}
           </div>
         </div>
+
         <div className="lg:col-span-3 space-y-6 overflow-y-auto pl-2 pb-20">
           <div className="bg-card rounded-xl shadow-sm border p-5">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">
@@ -971,7 +1061,7 @@ export default function Customizer() {
             <div className="grid grid-cols-2 gap-3">
               <div
                 className={cn(
-                  "aspect-square rounded-lg border-2 cursor-pointer overflow-hidden transition-all",
+                  "aspect-square relative  rounded-lg border-2 cursor-pointer overflow-hidden transition-all",
                   side === "front"
                     ? "border-primary ring-2 ring-primary/20"
                     : "border-transparent hover:border-border",
@@ -985,10 +1075,13 @@ export default function Customizer() {
                     className="w-full h-full object-cover"
                   />
                 )}
+                <p className="absolute bottom-1 bg-white shadow-lg shadow-black font-bold text-black px-5 py-1 left-1/2 -translate-x-1/2 text-xs rounded-full">
+                  {"Front"}
+                </p>
               </div>
               <div
                 className={cn(
-                  "aspect-square rounded-lg border-2 cursor-pointer overflow-hidden transition-all",
+                  "aspect-square relative rounded-lg border-2 cursor-pointer overflow-hidden transition-all",
                   side === "back"
                     ? "border-primary ring-2 ring-primary/20"
                     : "border-transparent hover:border-border",
@@ -1002,6 +1095,9 @@ export default function Customizer() {
                     className="w-full h-full object-cover"
                   />
                 )}
+                <p className="absolute bottom-1 shadow-lg shadow-black font-bold bg-white text-black px-5 py-1 left-1/2 -translate-x-1/2 text-xs rounded-full">
+                  {"Back"}
+                </p>
               </div>
             </div>
             <div className="mt-3 text-xs text-muted-foreground text-center">
@@ -1019,6 +1115,13 @@ export default function Customizer() {
                 value={customerInfo.name}
                 onChange={(e) =>
                   setCustomerInfo({ ...customerInfo, name: e.target.value })
+                }
+              />
+              <Input
+                placeholder="Company Name"
+                value={customerInfo.company}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, company: e.target.value })
                 }
               />
               <Input
